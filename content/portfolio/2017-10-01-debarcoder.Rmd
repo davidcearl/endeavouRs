@@ -1,0 +1,11 @@
+---
+title: debarcodeR
+author: David Earl
+date: '2017-10-01'
+slug: debarcoder
+categories:
+  - Shiny
+tags:
+  - Shiny
+---
+
