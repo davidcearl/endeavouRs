@@ -1,0 +1,42 @@
+---
+title: Shiny Module Basics
+author: David Earl
+date: '2017-10-15'
+slug: shiny-module-basics
+categories:
+  - Shiny
+tags: []
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Using Shiny Modules**
+
+Shiny modules provide a way to split complex Shiny apps into discrete functional units that can be used multiple times in a single app or reused in other apps.
+All input and output IDs in a Shiny app exist in the same global namespace which
+requires each ui and output object to have a unique id. Shiny modules use 
+namespacing to ensure all IDs are unique. Each module consits of a ui function
+and a server function similiar to the standard Shiny app ui and server functions. 
+
+The first argument to a module ui function must be the id for the module, which
+is used to define the module namespace. The module server function is called from
+the main server function using `shiny::callModule()`.  The first arguement to callModule is
+the module server function and the second arguement is the same id used for the 
+module ui.
+
+Within the ui function, the first line should create a namespace function using `shiny::NS(id)` where id is the module id arguement. The `shiny::tagList()` function
+should then be used to add ui components. Each module ui component's inputId arguement must be wrapped with the namespace function.
+
+```{r eval=FALSE}
+moduleUI <- function(id) {
+  ns <- NS(id)
+  tagList(
+    *Input(ns("inputID"))
+  )
+}
+```
+
+***
+![](/img/portfolio/shiny_module_figure.png)  

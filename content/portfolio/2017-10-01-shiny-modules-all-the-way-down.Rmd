@@ -1,0 +1,205 @@
+---
+title: Shiny modules all the way down
+author: David Earl
+date: '2017-10-01'
+slug: shiny-modules-all-the-way-down
+categories:
+  - Shiny
+tags:
+  - shiny-modules
+weight: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+As you begin using modules in your Shiny app, you will likely want to access 
+reactive values from one module in a different module. There might also be 
+instances where you want to use a module within another module and return 
+reactive objects from the inner module to be used in the outer module. There
+are no limits to how many levels of module nesting you can have but some 
+restraint should be used to maintain clairity. To illustrate how reactive values
+can be used between modules and how shiny NS functions work consider the 
+following (albeit somewhat contrived) example.
+
+```{r eval=FALSE}
+# module 1
+module_1_UI <- function(id) {
+  ns <- NS(id)
+  tagList(
+    p('module 1 sliderInput'),
+    sliderInput(ns('test_input'), 'slider', 1, 5, 1, 1),
+    p('module 1 sliderInput value output'),
+    verbatimTextOutput(ns('test_out'))
+  )
+}
+
+module_1 <- function(input, output, session) {
+  output$test_out <- renderPrint({
+    input$test_input
+  }) 
+}
+
+# ------------------------------------------------------------------------------
+# module 2
+module_2_UI <- function(id) {
+  ns <- NS(id)
+  tagList(
+    module_1_UI(ns('yellow')),
+    p('module 2 sliderInput value output'),
+    p('modlue 2 ui output is wrapped with ns()'),
+    verbatimTextOutput(ns('test_out'))
+  )
+}
+
+module_2 <- function(input, output, session) {
+  callModule(module_1, 'yellow')
+  output$test_out <- renderPrint({
+    session$input$`yellow-test_input`
+  }) 
+}
+
+# ------------------------------------------------------------------------------
+# module 3
+module_3_UI <- function(id){
+  ns <- NS(id)
+  tagList(
+    module_2_UI(ns('orange')),
+    p('module 3 sliderInput value output'),
+    p('modlue 3 ui ouput is manually prefixed'),
+    verbatimTextOutput('red-test_out')
+  )
+}
+
+module_3 <- function(input, output, session) {
+  callModule(module_2, 'orange')
+  output$test_out <- renderPrint({
+    session$input$`orange-yellow-test_input`
+  }) 
+}
+# ------------------------------------------------------------------------------
+# shiny app ui
+ui <- fluidPage(
+  h1('Chaining Modules'),
+  module_3_UI('red'),
+  p('main app sliderInput value output'),
+  p('the rendered input is manually prefixed with each module namespace'),
+  verbatimTextOutput('test_out')
+)
+
+# ------------------------------------------------------------------------------
+# shiny app server
+server <- function(input, output, session) {
+  callModule(module_3, 'red')
+  output$test_out <- renderPrint({
+    session$input$`red-orange-yellow-test_input`
+  })
+}
+
+# launch app
+shinyApp(ui, server)
+```
+
+As you can see in panel a) the NS function simply prefixes the namespace ID 
+argument to `callModule()` to the module and ui input and output IDs.  You can 
+access nested values by simply appending the prefix yourself. This also works 
+for the ui id as shown for the `module_3_UI` function higlighted in panel b)
+
+![](/img/portfolio/nested_modules.png) 
+
+Of course this invalidates most of the motivations for using modules in the 
+first place.  A better choice is to have inner modules return reactive values 
+if you want to use them in the outer module and/or pass them to subsequent 
+modules using optional arguments to `callModule()`
+
+```{r eval=FALSE}
+module_1 <- function(input, output, session) {
+  output$test_out <- renderPrint({
+    input$test_input
+  })
+  return(reactive(input$test_input))
+}
+
+module_2 <- function(input, output, session) {
+  mod1 <- callModule(module_1, 'yellow')
+  output$test_out <- renderPrint({
+    mod1()
+  })
+}
+```
+
+In the case of passing reactive objects between modules, I like to used named
+lists. In the example below, The main server function calls `module_5` which 
+calls `module_4` and `module_6`.  `module_4` returns two reactive objects which 
+are then passed to `module_6` and used to render ouptut. 
+
+```{r eval=FALSE}
+# ------------------------------------------------------------------------------
+# module 4
+module_4_UI <- function(id) {
+  ns <- NS(id)
+  tagList(
+    sliderInput(ns('num'), 'num', 1, 10, 1, 1),
+    sliderInput(ns('num_2'), 'num 2', 1, 10, 1, 1)
+  )
+}
+
+module_4 <- function(input, output, session) {
+  dist_1 <- eventReactive(input$num, {
+    rnorm(input$num)
+  })
+  dist_2 <- eventReactive(input$num_2, {
+    rnorm(input$num_2)
+  })
+  return(list('d1' = dist_1, 'd2' = dist_2))
+}
+
+# ------------------------------------------------------------------------------
+# module 5
+module_5_UI <- function(id) {
+  ns <- NS(id)
+  tagList(
+    module_4_UI(ns('four')),
+    module_6_UI(ns('six'))
+  )
+}
+
+module_5 <- function(input, output, session) {
+  reactive_dists <- callModule(module_4, 'four')
+  callModule(module_6, 'six', reactive_dists)
+}
+
+# ------------------------------------------------------------------------------
+# module 6
+module_6 <- function(input, output, session, reactive_dists) {
+  output$dist1 <- renderPrint({
+    reactive_dists[['d1']]()
+  })
+  output$dist2 <- renderPrint({
+    reactive_dists[['d2']]()
+  })
+}
+
+module_6_UI <- function(id) {
+  ns <- NS(id)
+  tagList(
+    verbatimTextOutput(ns('dist1')),
+    verbatimTextOutput(ns('dist2'))
+  )
+}
+
+# ------------------------------------------------------------------------------
+# shiny app ui
+ui <- fluidPage(
+  module_5_UI('five')
+)
+
+# ------------------------------------------------------------------------------
+# shiny app server
+server <- function(input, output, session) {
+  callModule(module_5, 'five')
+}
+
+shinyApp(ui, server)
+```

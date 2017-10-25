@@ -1,0 +1,364 @@
+---
+title: Nashillow
+author: David Earl
+date: '2017-10-01'
+slug: nashillow
+categories:
+  - Shiny
+tags: []
+showonlyimage: true
+image: "img/portfolio/nashmap.jpg"
+weight: 4
+---
+
+
+
+<div id="whats-happening-to-nashville" class="section level1">
+<h1>What’s happening to Nashville?</h1>
+<p>Ask any Nashvillian how the city is changing and they will tell you that it is growing at a breakneck speed. The skyline is peppered with cranes and entire blocks are being knocked down and rebuilt. My friends who are trying to buy houses speak with the despondent tone of hardened war vets. To have your offer even glanced at you better make it on the first day of listing and be over asking by at least $10K. Don’t even bother with East Nashville or Sylvan Park… I wanted to see if the hype matches reality and if this really is a time like nothing the city has seen before.</p>
+<div id="tldr" class="section level2">
+<h2>tl;dr</h2>
+<p>Finished product <a href="http://ec2-54-91-203-90.compute-1.amazonaws.com:3838/nash_prop">here</a> <img src="/img/portfolio/nashmap.jpg" /></p>
+</div>
+<div id="to-the-data" class="section level2">
+<h2>To the Data!</h2>
+<p>Zillow can tell you what they think your property will be worth next year and lots of other cool stats to brag about to your homeless friends, but I wanted the raw data. Public property assessor <a href="http://padctn.org/">records</a> to the rescue! If you have a list of address you can search one property at a time, but I don’t have such a list and that will take far too long. Conveniently the results pages follow a simple format and most data is in html lists or tables or has a standard xpath that can easily be parsed with the <code>XML</code> package.</p>
+<pre class="r"><code>get_li &lt;- function(parsed_card) {
+  li &lt;- XML::readHTMLList(parsed_card)
+  return(unlist(li[11:15]))
+}
+
+li_to_df &lt;- function(li) {
+  li &lt;-stringr::str_split(li, &#39;: &#39;, simplify = T)
+  df &lt;- data.frame(matrix(NA_character_, nrow = 1, ncol = dim(li)[1]),
+                   stringsAsFactors = F)
+  names(df) &lt;- li[,1]
+  df[1,] &lt;- li[,2]
+  return(df)
+}
+
+get_lat_lng &lt;- function(parsed_card) {
+  lat_lng_href &lt;- unlist(XML::xpathApply(parsed_card,
+                                         &quot;//a[@data-maptype]&quot;, 
+                                         XML::xmlGetAttr, 
+                                         &quot;href&quot;))
+  lat &lt;- stringr::str_sub(lat_lng_href, -26, -16)
+  lng &lt;- stringr::str_sub(lat_lng_href, -12, -1)
+  return(c(&#39;lat&#39; = lat, &#39;lng&#39; = lng))
+}</code></pre>
+<p>Each property is simply indexed by number and has a few associated pages. So I can dynamically generate the links and scrape the data I want using xpaths with the <code>RCurl</code> package. At this point I’m not exactly sure how I’ll use the data so I’ll store the scraped records as json. The R package <code>jsonlite</code> makes writing R structures into and reading out from JSON super simple.</p>
+<pre class="r"><code># get the main property page
+parse_base_card &lt;- function(url) {
+  if (RCurl::url.exists(url)) {
+    parsed_card &lt;- XML::htmlParse(RCurl::getURL(url))
+    df &lt;- li_to_df(get_li(parsed_card))
+    lat_lng &lt;- get_lat_lng(parsed_card)
+    df &lt;- append_lat_lng(df, lat_lng)
+    return(df)
+  }
+}
+
+# get the building details data
+parse_interior_card &lt;- function(url) {
+  if (RCurl::url.exists(url)) {
+    parsed_card &lt;- XML::htmlParse(RCurl::getURL(url))
+    df &lt;- li_to_df(get_interior_li(parsed_card))
+    return(df)
+  }
+}
+
+# get the sales and apprs history data
+parse_historical_tbls &lt;- function(url) {
+  if (RCurl::url.exists(url)) {
+    parsed_card &lt;- XML::htmlParse(RCurl::getURL(url))
+    tbls &lt;- XML::readHTMLTable(parsed_card)
+    return(tbls)
+  }
+}
+
+# main function
+scrape_property &lt;- function(prop_num) {
+  url &lt;- paste0(&quot;http://www.padctn.org/prc/property/&quot;, prop_num, &quot;/card/1&quot;)
+  basic &lt;- parse_base_card(url)
+  interior &lt;- parse_interior_card(paste0(url, &quot;/interior&quot;))
+  hist_tbls &lt;- parse_historical_tbls(paste0(url, &quot;/historical&quot;))
+  prop_data &lt;- list(Property = basic,
+                    Building = interior, 
+                    Sales = hist_tbls[[1]], 
+                    Appraisals = hist_tbls[[2]])
+  return(jsonlite::toJSON(prop_dat))
+}</code></pre>
+<p>Example scrapped record</p>
+<pre><code>{
+    &quot;Property&quot;: [
+        {
+            &quot;Map &amp; Parcel&quot;: &quot;161 10 0B 187.00&quot;,
+            &quot;Location&quot;: &quot;4700 CHEPSTOW DR&quot;,
+            &quot;Mailing Address&quot;: &quot; 4825 ENOCH DR, NASHVILLE, TN 37211&quot;,
+            &quot;Legal Description&quot;: &quot;LOT 33 VILLAGES OF BRENTWOOD PHASE 11 FINAL PLAT&quot;,
+            &quot;Tax District&quot;: &quot;USD  View Tax Record&quot;,
+            &quot;Assessment Classification*&quot;: &quot;RES&quot;,
+            &quot;Legal Reference&quot;: &quot;20160503-0043205 View Deed&quot;,
+            &quot;Sale Date&quot;: &quot;04/29/2016&quot;,
+            &quot;Sale Price&quot;: &quot;$264,000&quot;,
+            &quot;Assessment Year&quot;: &quot;2017&quot;,
+            &quot;Last Reappraisal Year&quot;: &quot;2017&quot;,
+            &quot;Improvement Value&quot;: &quot;$242,600&quot;,
+            &quot;Land Value&quot;: &quot;$45,000&quot;,
+            &quot;Total Appraisal Value&quot;: &quot;$287,600&quot;,
+            &quot;Assessed Value&quot;: &quot;$71,900&quot;,
+            &quot;Property Use&quot;: &quot;SINGLE FAMILY&quot;,
+            &quot;Zone&quot;: &quot;1&quot;,
+            &quot;Neighborhood&quot;: &quot;4038&quot;,
+            &quot;Land Area&quot;: &quot;0.22 Acres&quot;,
+            &quot;Property Type&quot;: &quot;SINGLE FAM&quot;,
+            &quot;Year Built&quot;: &quot;2000&quot;,
+            &quot;Square Footage&quot;: &quot;2,706&quot;,
+            &quot;Exterior Wall&quot;: &quot;BRICK/FRAME&quot;,
+            &quot;Story Height&quot;: &quot;TWO STY&quot;,
+            &quot;Building Condition&quot;: &quot;Average&quot;,
+            &quot;Foundation Type&quot;: &quot;CRAWL&quot;,
+            &quot;Number of Rooms&quot;: &quot;9&quot;,
+            &quot;Number of Beds&quot;: &quot;4&quot;,
+            &quot;Number of Baths&quot;: &quot;2&quot;,
+            &quot;Number of Half Bath&quot;: &quot;1&quot;,
+            &quot;Number of Fixtures&quot;: &quot;12&quot;,
+            &quot;lat&quot;: &quot;36.04430000&quot;,
+            &quot;lng&quot;: &quot;-86.73020000&quot;
+        }
+    ],
+    &quot;Building&quot;: [
+        {
+            &quot;Property Type&quot;: &quot;SINGLE FAM&quot;,
+            &quot;Year Built&quot;: &quot;2000&quot;,
+            &quot;Story Height&quot;: &quot;TWO STY&quot;,
+            &quot;Living Units&quot;: &quot;1&quot;,
+            &quot;Exterior Wall&quot;: &quot;BRICK/FRAME&quot;,
+            &quot;Building Condition&quot;: &quot;Average&quot;,
+            &quot;Foundation Type&quot;: &quot;CRAWL&quot;,
+            &quot;Roof Cover&quot;: &quot;ASPHALT&quot;,
+            &quot;Number of Rooms&quot;: &quot;9&quot;,
+            &quot;Number of Beds&quot;: &quot;4&quot;,
+            &quot;Number of Baths&quot;: &quot;2&quot;,
+            &quot;Number of Half Bath&quot;: &quot;1&quot;,
+            &quot;Number of Fixtures&quot;: &quot;12&quot;
+        }
+    ],
+    &quot;Sales&quot;: [
+        {
+            &quot;Sale Date&quot;: &quot;04/29/2016&quot;,
+            &quot;Sale Price&quot;: &quot;$264,000&quot;,
+            &quot;Deed Type&quot;: &quot;WARRANTY DEED&quot;,
+            &quot;Deed Book &amp; Page&quot;: &quot;20160503-0043205&quot;
+        },
+        {
+            &quot;Sale Date&quot;: &quot;03/16/2010&quot;,
+            &quot;Sale Price&quot;: &quot;$226,000&quot;,
+            &quot;Deed Type&quot;: &quot;WARRANTY DEED&quot;,
+            &quot;Deed Book &amp; Page&quot;: &quot;20100318-0020329&quot;
+        },
+        {
+            &quot;Sale Date&quot;: &quot;04/26/2007&quot;,
+            &quot;Sale Price&quot;: &quot;$235,000&quot;,
+            &quot;Deed Type&quot;: &quot;WARRANTY DEED&quot;,
+            &quot;Deed Book &amp; Page&quot;: &quot;20070502-0052273&quot;
+        },
+        {
+            &quot;Sale Date&quot;: &quot;03/30/2007&quot;,
+            &quot;Sale Price&quot;: &quot;$0&quot;,
+            &quot;Deed Type&quot;: &quot;QUIT CLAIM&quot;,
+            &quot;Deed Book &amp; Page&quot;: &quot;20070502-0052272&quot;
+        },
+        {
+            &quot;Sale Date&quot;: &quot;11/27/2000&quot;,
+            &quot;Sale Price&quot;: &quot;$178,737&quot;,
+            &quot;Deed Type&quot;: &quot;WARRANTY DEED&quot;,
+            &quot;Deed Book &amp; Page&quot;: &quot;20001206-0120256&quot;
+        },
+        {
+            &quot;Sale Date&quot;: &quot;08/08/2000&quot;,
+            &quot;Sale Price&quot;: &quot;$65,000&quot;,
+            &quot;Deed Type&quot;: &quot;WARRANTY DEED&quot;,
+            &quot;Deed Book &amp; Page&quot;: &quot;20000817-0081457&quot;
+        },
+        {
+            &quot;Sale Date&quot;: &quot;08/20/1998&quot;,
+            &quot;Sale Price&quot;: &quot;$0&quot;,
+            &quot;Deed Type&quot;: &quot;WARRANTY DEED&quot;,
+            &quot;Deed Book &amp; Page&quot;: &quot;0000661-00011076&quot;
+        }
+    ],
+    &quot;Appraisals&quot;: [
+        {
+            &quot;Year&quot;: &quot;2017&quot;,
+            &quot;Land Use Code&quot;: &quot;R11 - RES&quot;,
+            &quot;Building&quot;: &quot;$242,600&quot;,
+            &quot;Yard Items&quot;: &quot;$0&quot;,
+            &quot;Land Value&quot;: &quot;$45,000&quot;,
+            &quot;Category&quot;: &quot;ROLL&quot;,
+            &quot;Total&quot;: &quot;$287,600&quot;
+        },
+        {
+            &quot;Year&quot;: &quot;2013&quot;,
+            &quot;Land Use Code&quot;: &quot;R11 - RES&quot;,
+            &quot;Building&quot;: &quot;$213,800&quot;,
+            &quot;Yard Items&quot;: &quot;$0&quot;,
+            &quot;Land Value&quot;: &quot;$36,000&quot;,
+            &quot;Category&quot;: &quot;ROLL&quot;,
+            &quot;Total&quot;: &quot;$249,800&quot;
+        },
+        {
+            &quot;Year&quot;: &quot;2009&quot;,
+            &quot;Land Use Code&quot;: &quot;R11 - RES&quot;,
+            &quot;Building&quot;: &quot;$215,700&quot;,
+            &quot;Yard Items&quot;: &quot;$0&quot;,
+            &quot;Land Value&quot;: &quot;$36,000&quot;,
+            &quot;Category&quot;: &quot;ROLL&quot;,
+            &quot;Total&quot;: &quot;$251,700&quot;
+        },
+        {
+            &quot;Year&quot;: &quot;2005&quot;,
+            &quot;Land Use Code&quot;: &quot;R11 - RES&quot;,
+            &quot;Building&quot;: &quot;$195,400&quot;,
+            &quot;Yard Items&quot;: &quot;$0&quot;,
+            &quot;Land Value&quot;: &quot;$36,000&quot;,
+            &quot;Category&quot;: &quot;ROLL&quot;,
+            &quot;Total&quot;: &quot;$231,400&quot;
+        },
+        {
+            &quot;Year&quot;: &quot;2001&quot;,
+            &quot;Land Use Code&quot;: &quot;R11 - RES&quot;,
+            &quot;Building&quot;: &quot;$167,400&quot;,
+            &quot;Yard Items&quot;: &quot;$0&quot;,
+            &quot;Land Value&quot;: &quot;$36,000&quot;,
+            &quot;Category&quot;: &quot;ROLL&quot;,
+            &quot;Total&quot;: &quot;$203,400&quot;
+        },
+        {
+            &quot;Year&quot;: &quot;2000&quot;,
+            &quot;Land Use Code&quot;: &quot;R10 - RES&quot;,
+            &quot;Building&quot;: &quot;$0&quot;,
+            &quot;Yard Items&quot;: &quot;$0&quot;,
+            &quot;Land Value&quot;: &quot;$20,000&quot;,
+            &quot;Category&quot;: &quot;RLL&quot;,
+            &quot;Total&quot;: &quot;$20,000&quot;
+        }
+    ]
+}</code></pre>
+</div>
+<div id="setting-up-aws" class="section level2">
+<h2>Setting up AWS</h2>
+<p>I decided to spin up an ec2 instance to run my scrapper and develop the rest of the project using rstudio server. I also will store data as I go in an s3 bucket. The AWS CLI tool makes managing AWS resources quick and easy.</p>
+<pre><code>sudo pip install awscli
+#set credentials and region
+aws configure
+# make the s3 bucket
+aws s3 mb s3://nash-prop/ 
+#create a security group for the ec2 instance
+aws ec2 create-security-group --group-name dev-nash --description &quot;security group for development environment for nash-prop&quot;
+#enable ports for ssh, rstuido
+aws ec2 authorize-security-group-ingress --group-name dev-nash --protocol tcp --port 22 --cidr 0.0.0.0/0
+aws ec2 authorize-security-group-ingress --group-name dev-nash --protocol tcp --port 8787 --cidr 0.0.0.0/0
+#create key pair
+aws ec2 create-key-pair --key-name nash-prop-key --query &#39;KeyMaterial&#39; --output text &gt; nash-prop-key.pem
+#launch instance
+aws ec2 run-instances --image-id ami-c481fad3 --security-group-ids &lt;security_group_id&gt; --count 1 --instance-type t2.medium --key-name nash-prop-key --query &#39;Instances[0].InstanceId&#39;
+#get the public ip
+aws ec2 describe-instances --instance-ids &lt;instance_id&gt; --query &#39;Reservations[0].Instances[0].PublicIpAddress&#39;</code></pre>
+<p>Now after setting the correct permissions on the new .pem key I can ssh into the instance and install RStudio.</p>
+<pre><code>#ssh into ec2 instance
+ssh -i &lt;path_to_key&gt; ec2-user@&lt;public_ip&gt;
+#install R
+sudo yum -y R
+#install rstudio
+wget https://download2.rstudio.org/rstudio-server-rhel-0.99.903-x86_64.rpm
+sudo yum install --nogpgcheck rstudio-server-rhel-0.99.903-x86_64.rpm
+#add rstudio user
+sudo useradd rstudio
+sudo passwd rstudio
+#install dependencies for r packages 
+sudo yum install libcur*
+sudo yum install libxml*
+sudo yum install openssl
+sudo yum install libpng-devel
+sudo yum install libjpeg-devel</code></pre>
+</div>
+<div id="time-to-scrape" class="section level2">
+<h2>Time to scrape</h2>
+<p>Now I can run my scrapping function on the 250,000+ properties in Davidson County</p>
+</div>
+<div id="getting-the-data-into-a-usable-format" class="section level2">
+<h2>Getting the data into a usable format</h2>
+<p>I ultimately want to interactively plot the data through time. Each property has records of every sale with some going back to the 1800s! After <a href="https://github.com/davidcearl/nash-prop/blob/master/scraper/json_to_db.R">cleaning up</a> the data I decided to split things up into three tables. One will be a table with general info about property such as location and square feet. Then I’ll have a table for sales history and one for appraisal history. Since the property assessors hasn’t assingned robust ids to the properties I had to generate them so I can reliably link tables. I also decided to store the cleaned data in a postgresql database hosted on AWS RDS</p>
+</div>
+<div id="building-an-interactive-web-app-with-shiny" class="section level2">
+<h2>Building an interactive web app with Shiny</h2>
+<p>Shiny lets you quickly build interactive apps and offers <a href="http://www.shinyapps.io/">hosting</a> services or you can run your own shiny server. The two required parts of a shiny app are the ui function and the server function, but in this case I also needed to write a few <a href="https://github.com/davidcearl/nash-prop/blob/master/shiny-app/shiny_sql.R">functions</a> so my shiny app can connect and query my database. I want to be able to select a date range and view basic statistics for different parts of the city and view the results on a map of the county. The ui function can handle getting the user input and the server function will query the database based on the input and render the plot with ggplot</p>
+<p><strong>ui.R</strong></p>
+<pre class="r"><code>shinyUI(fluidPage(
+  titlePanel(&quot;Historical Davidson County Property Data&quot;),
+  sidebarLayout(
+    sidebarPanel(
+      sliderInput(&quot;selected_date&quot;,
+                  &quot;Date:&quot;,
+                  min=as.Date(&quot;1990-01-01&quot;),
+                  max=as.Date(&quot;2015-01-01&quot;),
+                  value=as.Date(&quot;2005-01-01&quot;),
+                  step=1),
+      radioButtons(&quot;period&quot;, &quot;Window:&quot;, c(&quot;Year&quot; = &quot;year&quot;, &quot;Month&quot; = &quot;month&quot;)),
+      p(strwrap(&quot;Choosing Year will get all sales over a year 
+                long window with the selected date in the middle.&quot;)),
+      p(strwrap(&quot;Choosing Month will get all sales over a 31 day 
+                window with the selected date in the middle.&quot;)),
+      selectInput(&quot;sum_func&quot;, &quot;Summary Stat:&quot;,
+                 c(&quot;Number of Sales&quot; = &#39;length&#39;,
+                   &quot;Total Sale Amount&quot; = &#39;sum&#39;,
+                   &quot;Average Sale Price&quot; = &#39;mean&#39;,
+                   &quot;Median Sale Price&quot; = &#39;median&#39;)),
+      p(&quot;Generate the plot&quot;),
+      actionButton(&quot;goButton&quot;, &quot;Ok&quot;)),
+    mainPanel(plotOutput(&quot;prop_map&quot;, width = &#39;500px&#39;)))
+))</code></pre>
+<p><strong>server.R</strong></p>
+<pre class="r"><code>library(ggplot2)
+library(dplyr)
+source(&quot;shiny_sql.R&quot;)
+
+shinyServer(function(input, output) {  
+  timespan &lt;- 182
+  map_nash &lt;- qmap(c(-86.74866, 36.13875), zoom = 11, color = &#39;bw&#39; )
+ 
+  output$prop_map &lt;- renderPlot({   
+    input$goButton
+    sum_function &lt;- isolate(input$sum_func)
+    center_date &lt;- isolate(input$selected_date)
+    per &lt;- isolate(input$period)
+    if (per == &#39;month&#39;){
+      timespan &lt;- 15
+    }
+    start_date &lt;- center_date - timespan
+    end_date &lt;- center_date + timespan
+    df &lt;- shiny_get_df_from_db(c(paste0(&quot;&#39;&quot;,
+                                        start_date,
+                                        &quot;&#39;&quot;),
+                                 paste0(&quot;&#39;&quot;,
+                                        end_date,
+                                        &quot;&#39;&quot;)))
+    plot_nash &lt;- df[-which(is.na(df$lat) &amp; is.na(df$lng)),-1]    
+    map_nash + 
+      coord_cartesian() +
+      stat_summary_2d(data = filter(plot_nash,
+                                    sale_price &lt; 1e6 &amp; sale_price &gt; 50000),
+                      aes(x = lng, y = lat, z = sale_price),
+                      fun = sum_function, binwidth = c(0.01,0.01),
+                      alpha = 0.6, geom = &#39;raster&#39;, interpolate = T) +
+      scale_fill_gradientn(colours = c(&#39;purple&#39;, &#39;red&#39;, &#39;yellow&#39; )) 
+    
+  })
+})</code></pre>
+</div>
+<div id="time-to-explore" class="section level2">
+<h2>Time to explore!</h2>
+<p>When did the number of sales in East Nashville start to explode? Are the most expensive parts of town in 2014 the same as the ones in 1994? What neighborhoods were most affected by the 2008 bubble? Take a look for <a href="http://ec2-54-91-203-90.compute-1.amazonaws.com:3838/nash_prop">yourself!</a></p>
+</div>
+</div>

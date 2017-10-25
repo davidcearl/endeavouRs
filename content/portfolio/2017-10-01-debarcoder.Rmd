@@ -1,11 +1,142 @@
 ---
-title: debarcodeR
+title: DebarcodeR
 author: David Earl
 date: '2017-10-01'
-slug: debarcoder
+slug: DebarcodeR
 categories:
   - Shiny
 tags:
   - Shiny
+weight: 1
 ---
+
+**Intro**
+
+Our lab is developing tools to analyze patient specific effects of potential new chemotherapies using biopsy samples from patients being treated at Vanderbilt.  This raises two challenges: 
+
+1. How do we obtain the maximal amount of information from these precious samples?
+2. How do we handle sample heterogeneity?
+
+To address the first issue we are using flow and mass cytometry which can measure dozens to hundreds of biomarkers on millions of single cells in a single run. Also we use a sample barcoding strategy that allows us to perform multiple sub-experiments on each sample.  However the samples contains cells of varying size and type which are labeled with the barcode with varying efficiency. To address this problem and to automate the process of de-barcoding the data we are developing DebarcodeR, an R package that allows users to correct for cellular variability in their barcoded data using multiple regression and classify each barcoded data point using mixture modeling.  DebarcodeR currently can be run as a Shiny app using local files or using the Cytobank API.
+
+**App layout**
+
+DebarcodeR functionality is split over 6 modules.  The setup module allows the 
+user to select what mode they want to run the app in and load their experiment. If
+API mode is chosen the user can enter their API token and DebarcodeR will fetch
+experiments from Cytobank. The setup module returns a reactive experiment object
+that is passed to the fcb_select module. The experiment object contains the
+experiment data loaded into `flowCore` flow frames and additional experimental 
+information. The fcb_select module lets the user specify how their data is
+barcoded and the cellular populations they want to debarcode. The fcb_select 
+module returns data frames to be used for regression and population classification 
+by the DebarcodeR module. The last three modules allow the classified datasets
+to be split into separate files and uploaded to Cytobank for further analysis.
+
+```{r eval=FALSE}
+server <- function(input, output, session) {
+
+  setup <- callModule(setup, 'setup')
+
+  fcb <- callModule(fcb_select, 'fcb_select', setup)
+
+  debarcoded <- callModule(run_DebarcodeR, 'run_db', fcb)
+
+  callModule(assign_split, 'assign_split', setup, fcb, debarcoded)
+
+  upload_id <- callModule(upload, 'upload', setup)
+
+  sample_tag <- callModule(sample_tag, 'sample_tag', setup, upload_id)
+
+}
+```
+
+**Demo**
+
+DebarcodeR has a demo mode and example datasets which will be walked through below
+to illustrate how the Shiny app can be used. If you want try the app yourself the
+latest version is hosted on shinyapps.io/
+
+**Tab 1**
+
+On the first tab select demo from the Select mode drop down menu. Then click run demo
+to load the example experiment before proceeding to the second tab. 
+
+***
+
+![](/img/portfolio/setup.png)
+
+***
+
+**Tab 2**
+
+In the FCB File menu make sure Jurkat_48x_FCB2_timeslice is selected (FCB stands for 
+fluorescent cell barcode). The FCB population menu is used to choose from any gated 
+populations that were defined on Cytobank prior to importing the experiment. Similarly 
+the Comp Matrix drop down allows you to specify a specific compensation matrix to use.
+The final two inputs that must be set are the BC1 channel and BC2 channel. In the 
+example experiment the Pacific Orange and Pacific Blue channels were used to encode 
+the barcoding information. Clicking the Done button returns a plot of all measured cells that
+meet the specified criteria. You can then use the cutoff sliders to exclude noisy 
+data points. After adjusting the cutoffs click the Done button again and proceed to 
+the third tab.
+
+***
+
+![](/img/portfolio/debarcode_1.png)
+
+***
+
+**Tab 3**
+
+On the debarcode tab you can specify the number of levels in each barcode channel 
+as well a set a cutoff to only classify a data point to a level that excedes a certain 
+confidence level. Clicking Run DebarcodeR on BC1 will first perform the regression 
+correction and then fit the levels as a mixture of skew normal distributions and assign
+cells to the modeled distribution under which it falls.  In the case of very large 
+data sets a subset of data points can be used to fit the model for improved performance.
+
+***
+
+![](/img/portfolio/debarcode_2.png)
+
+***
+
+After the modeling is finished a histogram plot of the fit is returned as well
+as a plot of BC1 (in this case Pacific Orange) vs. SSC (cell size) with each cellular
+data point colored by the assigned label. As you can see the points between barcoded 
+sub-populations that did not meet the uncertainty cutoff are classified as level 0.
+
+***
+
+![](/img/portfolio/debarcode_3.png)
+
+***
+
+After DebarcodeR has finished BC1, select the number of levels that should be 
+present in BC2 (8 levels of Pacific Blue in the example data), set the uncertainty cutoff and then
+click Run DebarcodR on BC2. This should run very quickly as many of the parameters 
+learned from fitting BC1 can be reused. Plots of for each BC1 level are returned again
+with cellular data points colored by the assigned BC2 level. At this point you can 
+proceed to tab 4. 
+
+***
+
+![](/img/portfolio/debarcode_4.png)
+
+***
+
+**Tab 4**
+
+DebarcodeR assumes that the experiment was performed on multi-well plates where each well corresponds
+to a unique experiment condition and each well has a unique combination of barcode levels. You can 
+specify the layout of the barcode using the drop down menus which will then be used to 
+match debarcoded data points to the well from which they originated.  At this point you can split 
+and write each debarcoded population to its own fcs file compatible with Cytobank or download a csv file
+with classification labels for each data point.
+
+***
+
+![](/img/portfolio/assign.png)
+
 

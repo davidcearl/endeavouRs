@@ -1,0 +1,250 @@
+---
+title: You Know Nothing Jon Snow
+author: David Earl
+date: '2017-10-01'
+slug: you-know-nothing-jon-snow
+categories: []
+tags:
+  - network-graph
+weight: 3
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE, warning=FALSE, message=FALSE)
+```
+
+**Intro**
+
+The world created by George R. R. Martin in the Song of Ice and Fire series is 
+full of warring factions and complex relationships between characters. This 
+analysis attempts to build a network graph of the world from the raw text of 
+the books with no foreknowledge of the plot or characters.  
+
+**Getting Started**
+
+Each book was exported from an ebook reader as a plain text file. The table of 
+contents, introduction, and appendixes were removed and extra white space was 
+trimmed. The books were then read in and collapsed into a single character 
+string. 
+
+```{r}
+load_books <- function(text_dir = '.', encoding = 'ANSI') {
+  books <- c()
+  for (text in list.files(text_dir)) {
+    books[[text]] <- readLines(paste0(text_dir, text), encoding = encoding)
+  }
+  return(books)
+}
+
+collapse_books <- function(books) {
+  for (book in seq(length(books))) {
+    books[[book]] <- paste(books[[book]], sep = '', collapse = '')
+  }
+  return(paste(books, collapse = ''))
+}
+
+books <- load_books('./texts/')
+books <- collapse_books(books)
+```
+
+Next, taking advantage of the structure of dialog I first tried identifying 
+characters by finding capitalized words that appear after end quotes `”` 
+using the regular expressions `'” [A-Z][a-z]+'`.
+
+After some testing on some sample text this approach looks promising. However, 
+it looks like full names are being truncated.
+
+`[1] "Gared"  "Ser"  "Royce"  "Gared"  "Royce"  "Gared"`
+
+Expanding the number of time the pattern is matched returns titles and full 
+names. Also one of the people groups in the books use 'kh' to indicate proper 
+nouns so the pattern will be adjusted to account for those cases as 
+well. `'” (([A-Z]|kh)[a-z]+ ){1,3}'`
+
+`[1] "Gared"  "Ser Waymar Royce"  "Royce" "Gared" "Royce"`          
+
+While the `stringr` package is awesome and typically more convenient, I've found 
+the base R string functions are more forgiving when dealing with text sources 
+not encoded in UTF-8.  The function below uses `gregexpr` and `substr` to 
+extract strings matching the regex pattern and returns a character vector. 
+It also stores the position of the match using the names attribute of the 
+vector and can filter out stopwords to simplify later analysis.
+
+```{r}
+extract_pattern <- function(string,
+                            pattern = "” (([A-Z]|kh)[a-z]+ ){1,3}",
+                            offset_start = 2,
+                            offset_end = 2,
+                            stopwords = NULL) {
+  matches <- gregexpr(pattern, string)
+  match_lengths <- attributes(matches[[1]])$match.length
+  matches <- unlist(matches)
+  extracted <- c()
+  for (i in seq(length(matches))) {
+    match_str <- substr(x = string, 
+                        start = matches[i] + offset_start,
+                        stop = matches[i] + match_lengths[[i]] - offset_end)
+    if (!tolower(match_str) %in% stopwords) {
+       extracted[[paste(matches[i])]] <-  match_str
+     }
+  }
+  return(extracted)
+}
+
+extra_stopwords <- c('none', 'one', 'sometimes', 'must',
+                     'still', 'another', 'better', 'yet',
+                     'together', 'though', 'perhaps', 'unless', 'maybe',
+                     'worse', 'whenever', 'even', 'oh', '')
+
+stopwords <- c(tm::stopwords(), extra_stopwords)
+
+speakers <- extract_pattern(books, stopwords = stopwords)
+head(sort(table(speakers), decreasing = T), 50)
+```
+
+Spot checking with `table` higlights a few issues. First proper titles and last 
+names are causing there to be multiple entries for a single character so I will 
+want to combine them by using standard names. 
+
+```{r}
+titles <- c('Captain', 'Grand', 'Khal', 'King', 'Lady','Lord',
+            'Maester', 'Magister', 'Prince', 'Princess', 'Queen',
+            'Septa', 'Ser')
+
+swap_to <- c('Jon', 'Sam', 'Dany', 'Ned', 'Mance Rayder',
+             'Meera', 'Mirri Maz Duur', 'Lysa')
+
+swap_from <- c('Jon Snow', 'Samwell Tarly', 'Daenerys', 'Eddard Stark', 
+               'Mance', 'Meera Reed', 'Mirri', 'Lysa Arryn')
+
+clean_speakers <- function(speakers, titles, swap_to, swap_from) {
+  speakers <- gsub(paste(titles, collapse = '|'), "", speakers)
+  speakers <- trimws(speakers)
+  for (i in seq(length(swap_to))) {
+    speakers[which(speakers == swap_from[i])] <- swap_to[i]
+  }
+  return(speakers)
+}
+
+cl_speakers <- clean_speakers(speakers, titles = titles, 
+                           swap_to = swap_to, swap_from = swap_from)
+
+head(sort(table(cl_speakers), decreasing = T), 50)
+```
+
+Next the parsed dialogue can be used to build simple network representations. 
+Each character who appears as speaker will be a node and edges will be defined 
+for each character they spoke before and weighted by the number of times they 
+spoke before the other character.  I also want to filter out minor characters 
+and interactions.  I will be using the `igraph` package which can build a 
+network object from a data.frame of nodes and other attributes.
+
+```{r}
+node_df <- function(speakers, min_edges = 3, min_edge_weight = 2) {
+  people <- unique(speakers)
+  spoke_before <- list()
+  for (person in people) {
+    if (length(which(speakers == person)) > min_edges) {
+      tbl <- table(speakers[which(speakers == person)+1])
+      df <- as.data.frame(tbl[tbl > min_edge_weight])
+      if (nrow(df) > min_edges) {
+        df$person <- person
+        df <- df[c(3,1,2)]
+        names(df) <- c('node1', 'node2', 'weight')
+        spoke_before[[person]] <- df
+      }
+    }
+  }
+  return(dplyr::bind_rows(spoke_before))
+}
+
+build_network_graph <- function(node_df, dim = 3, niter = 2500) {
+  net <- igraph::graph_from_data_frame(node_df)
+  net <- igraph::simplify(net, remove.multiple = F)
+  lay <- igraph::layout_with_fr(net, dim = dim, niter = niter)
+  return(list('network' = net, 'layout' = lay))
+}
+
+speaker_nodes <- node_df(cl_speakers)
+network <- build_network_graph(speaker_nodes)
+```
+
+```{r}
+net <- network[['network']]
+
+lay <- network[['layout']]
+
+char_names <- igraph::vertex_attr(net)$name
+
+node_size <- sapply(igraph::V(net)$name, function(x) {
+  length(igraph::E(net)[from(x)]) + 1
+}) 
+
+edge_weights <- igraph::edge_attr(net)$weight
+
+norm_edge_weights <- round(edge_weights/max(edge_weights), 1)
+
+edges <- igraph::get.edges(net, igraph::E(net))
+
+xs <- c()
+ys <- c()
+zs <- c()
+for (i in seq(nrow(edges))) {
+  xs <- c(xs, lay[edges[i,1],1], lay[edges[i,2],1], NA)
+  ys <- c(ys, lay[edges[i,1],2], lay[edges[i,2],2], NA)
+  zs <- c(zs, lay[edges[i,1],3], lay[edges[i,2],3], NA)
+}
+
+rep_weights <- unlist(lapply(norm_edge_weights, rep, 3))
+
+blues <- which(rep_weights %in% c(0.3, 0.4, 0.5))
+purples <- which(rep_weights %in% c(0.6, 0.7, 0.8))
+reds <- which(rep_weights %in% c(0.9, 1))
+not_greys <- c(blues, purples, reds)
+```
+
+```{r}
+library(plotly)
+plot_ly(x = xs[-not_greys], 
+        y = ys[-not_greys], 
+        z = zs[-not_greys], 
+        type = 'scatter3d',
+        hoverinfo = 'none',
+        mode = 'lines', 
+        line = list(color = 'grey',
+                    width = 1)
+        ) %>%
+  add_trace(x = xs[blues],
+            y = ys[blues],
+            z = zs[blues], 
+            mode = 'lines', 
+            line = list(color = 'blue', 
+                         width = 3)
+            ) %>%
+  add_trace(x = xs[purples], 
+            y = ys[purples], 
+            z = zs[purples], 
+            mode = 'lines', 
+            line = list(color = 'green',
+                         width = 4)
+            ) %>%
+  add_trace(x = xs[reds], 
+            y = ys[reds],
+            z = zs[reds], 
+            mode = 'lines', 
+            line = list(color = 'red', 
+                         width = 5)
+            ) %>%
+  add_trace(x = lay[,1], 
+            y = lay[,2], 
+            z = lay[,3],
+            mode = 'lines+markers',
+            text = char_names,
+            textposition = 'topleft',
+            #textfont = list(family = 'arial', size = 10),
+            hoverinfo = 'text',
+            marker = list(size = node_size, 
+                          color = 'orange', 
+                          sizemin = 10))
+```
+
+
